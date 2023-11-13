@@ -1,38 +1,52 @@
 from fastapi import FastAPI, Query, HTTPException, Depends, status
-from pydantic import BaseModel
-from sqlalchemy.orm import Session
-from database import engine, SessionLocal
+from typing import Optional
 from enum import Enum
-from typing import Optional, Annotated
 
+from modelsbase import ProductBase, UpdateStockBase
+from models import Product
+from dependency import db_dependency
+from database import engine
 import models
 
 app = FastAPI()
 models.Base.metadata.create_all(bind=engine)
 
-class InventoryBase(BaseModel):
-    product_name: str
-    product_description: str
-    price: float
-    remaining_stock: int
-    total_sale_qty: int
-    total_sale_amount: float
-    user_id: int
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-db_dependency = Annotated[Session, Depends(get_db)]
-
-@app.post('/inventories', status_code=status.HTTP_201_CREATED)
-async def create_inventory(inventory: InventoryBase, db: db_dependency):
-    db_inventory = models.Inventory(**inventory.model_dump())
-    db.add(db_inventory)
+# create product with inventory
+@app.post('/products', status_code=status.HTTP_201_CREATED, description='creates product and add it\'s inventory details')
+async def create_product(product_initial: ProductBase, db: db_dependency):
+    product_final = product_initial.model_dump()
+    product_final.update({'total_sale_qty':0, 'total_sale_amount':0, 'low_stock':product_initial.remaining_stock < 10})
+    new_product = Product(**product_final)
+    db.add(new_product)
     db.commit()
+    return new_product.as_dict()
+
+# retreave product details
+@app.get('/products/{id}', status_code=status.HTTP_200_OK, description='gets product details')
+async def get_product(id: int, db: db_dependency):
+    product = db.query(Product).filter_by(id=id).first()
+    if product:
+        return product
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='product details not found!')
+
+# updates stock
+@app.patch('/products/{id}', status_code=status.HTTP_200_OK, description='modifies product stock')
+async def update_stock(id: int,  db: db_dependency, updated_product: UpdateStockBase):
+    product_final = updated_product.model_dump()
+    product_final.update({'low_stock': updated_product.remaining_stock < 10})
+    new_product = Product(**product_final)
+    product = db.query(Product).filter_by(id=id).first()
+    if product:
+        product.remaining_stock = new_product.remaining_stock
+        product.low_stock = new_product.low_stock
+        db.commit()
+        db.refresh(product)
+        return product
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='couldn\'t update! product details not found!')
+
+
+
+
 
 
 # # INTRODUCTION
